@@ -1,0 +1,127 @@
+# ============================================================
+# LIBRARIES
+# ============================================================
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+# ============================================================
+# DATA
+# ============================================================
+df <- data.frame(
+  Variant = c(
+    "missense_variant","intergenic_region","synonymous_variant",
+    "intron_variant","intragenic_variant",
+    "non_coding_transcript_exon_variant","non_coding_transcript_variant",
+    "splice_region_variant&intron_variant","stop_gained",
+    "missense_variant&splice_region_variant",
+    "splice_region_variant&synonymous_variant",
+    "splice_region_variant&non_coding_transcript_exon_variant",
+    "splice_acceptor_variant&splice_donor_variant&intron_variant",
+    "stop_lost&splice_region_variant",
+    "splice_region_variant&stop_retained_variant"
+  ),
+  I001_bulk = c(6062,4748,2374,1150,548,456,155,43,19,13,4,3,2,1,0),
+  I001_sibling = c(6172,4832,2415,1123,981,516,185,43,19,12,5,3,2,2,0),
+  X2_2_1600_1 = c(6079,5193,2403,1241,546,481,154,44,19,13,4,3,2,1,0),
+  X2_1_1600_3 = c(5985,4804,2375,1121,538,470,156,43,19,12,6,3,2,1,1),
+  X1_1_1600_2 = c(5995,4186,2414,981,519,405,153,42,21,11,4,3,2,1,0),
+  X1_2_1600_2 = c(6015,3854,2365,908,531,457,153,43,19,10,4,3,2,1,1),
+  check.names = FALSE
+)
+
+# ============================================================
+# RESHAPE
+# ============================================================
+df_long <- df %>%
+  pivot_longer(-Variant, names_to = "Sample", values_to = "Count")
+
+# ============================================================
+# SAMPLE NAMES
+# always prefix with sample_
+# ============================================================
+df_long <- df_long %>%
+  mutate(Sample = paste0("sample_", Sample))
+
+# ============================================================
+# COLLAPSE LOW-FREQUENCY VARIANTS
+# threshold based on total across all samples
+# ============================================================
+df_long <- df_long %>%
+  group_by(Variant) %>%
+  mutate(total_variant_count = sum(Count)) %>%
+  ungroup() %>%
+  mutate(
+    Variant_grouped = ifelse(total_variant_count < 200, "Other", Variant)
+  )
+
+# ============================================================
+# SUM AFTER GROUPING
+# ============================================================
+df_plot <- df_long %>%
+  group_by(Sample, Variant_grouped) %>%
+  summarise(Count = sum(Count), .groups = "drop")
+
+# ============================================================
+# ORDER SAMPLES
+# ============================================================
+sample_order <- c(
+  "sample_I001_bulk",
+  "sample_I001_sibling",
+  "sample_X1_1_1600_2",
+  "sample_X1_2_1600_2",
+  "sample_X2_1_1600_3",
+  "sample_X2_2_1600_1"
+)
+
+df_plot$Sample <- factor(df_plot$Sample, levels = sample_order)
+
+# ============================================================
+# ORDER VARIANT GROUPS BY TOTAL ABUNDANCE
+# ============================================================
+variant_order <- df_plot %>%
+  group_by(Variant_grouped) %>%
+  summarise(Total = sum(Count), .groups = "drop") %>%
+  arrange(desc(Total)) %>%
+  pull(Variant_grouped)
+
+df_plot$Variant_grouped <- factor(df_plot$Variant_grouped, levels = variant_order)
+
+# ============================================================
+# SOFT PASTEL PALETTE
+# make sure there are enough colors
+# ============================================================
+pastel_colors <- c(
+  "#FBB4AE", "#B3CDE3", "#CCEBC5", "#DECBE4", "#FED9A6",
+  "#FFFFCC", "#E5D8BD", "#FDDAEC", "#C7EAE5", "#D9D9D9",
+  "#F2C1D1", "#D6E8C3"
+)
+
+n_groups <- nlevels(df_plot$Variant_grouped)
+fill_colors <- pastel_colors[seq_len(n_groups)]
+
+# ============================================================
+# STACKED BAR PLOT
+# ============================================================
+p <- ggplot(df_plot, aes(x = Sample, y = Count, fill = Variant_grouped)) +
+  geom_bar(stat = "identity", width = 0.8) +
+  geom_text(
+    data = df_plot %>% filter(Count > 300),
+    aes(label = Count),
+    position = position_stack(vjust = 0.5),
+    size = 3
+  ) +
+  scale_fill_manual(values = fill_colors) +
+  labs(
+    title = "Variant Composition Across Samples",
+    x = "Sample",
+    y = "Number of Variants",
+    fill = "Variant Type"
+  ) +
+  theme_bw(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank()
+  )
+
+print(p)
