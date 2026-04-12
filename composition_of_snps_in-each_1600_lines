@@ -4,259 +4,177 @@
 library(readxl)
 library(dplyr)
 library(ggplot2)
-library(scales)
 library(stringr)
+library(patchwork)
 
 # ============================================================
-# INPUT EXCEL FILE
+# INPUT
 # ============================================================
 input_file <- "Copy of 1600_samples_nonsyn_SNPs_not_present_in.xlsx"
+output_file <- "all_sheets_donut_panels_grouped_lowfreq_fixed.png"
 
 # ============================================================
-# OUTPUT DIRECTORY
+# SETTINGS
 # ============================================================
-outdir <- "excel_sheet_exploration_and_donut_plots"
-dir.create(outdir, showWarnings = FALSE)
+low_freq_threshold <- 5
 
 # ============================================================
-# GET SHEET NAMES
+# SHEETS
 # ============================================================
 sheet_names <- excel_sheets(input_file)
 
-cat("Workbook contains", length(sheet_names), "sheets:\n")
-print(sheet_names)
-
 # ============================================================
-# FIRST PASS:
-#   1. Read each sheet with no assumed header
-#   2. Standardize first 8 columns
-#   3. Remove fully empty rows
-#   4. Print structure
-#   5. Check exact duplicate rows
-#   6. Check duplicate SNP IDs
-#   7. Collect all EFFECT values for shared color map
+# READ AND CLEAN ALL SHEETS
 # ============================================================
 sheet_data <- list()
 all_effects <- character()
 
 for (sheet_name in sheet_names) {
-  
-  cat("\n============================================================\n")
-  cat("Reading sheet:", sheet_name, "\n")
-  
-  # read with NO header assumption
-  df_raw <- read_excel(input_file, sheet = sheet_name, col_names = FALSE)
-  df_raw <- as.data.frame(df_raw, stringsAsFactors = FALSE)
-  
-  cat("Original dimensions:", nrow(df_raw), "rows x", ncol(df_raw), "columns\n")
-  
-  # keep first 8 columns if present
-  keep_n <- min(8, ncol(df_raw))
-  df <- df_raw[, 1:keep_n, drop = FALSE]
-  
-  # assign standard names
+
+  df <- read_excel(input_file, sheet = sheet_name, col_names = FALSE)
+  df <- as.data.frame(df, stringsAsFactors = FALSE)
+
+  keep_n <- min(8, ncol(df))
+  df <- df[, 1:keep_n, drop = FALSE]
+
   std_names <- c("CHROM", "POS", "REF", "ALT", "GENE", "EFFECT", "ANNOT1", "ANNOT2")
   colnames(df) <- std_names[1:ncol(df)]
-  
-  # remove fully empty rows
+
   df <- df %>%
-    filter(!if_all(everything(), ~ is.na(.) | . == ""))
-  
-  # standardize types
-  if ("CHROM" %in% names(df))  df$CHROM  <- as.character(df$CHROM)
-  if ("POS" %in% names(df))    df$POS    <- suppressWarnings(as.numeric(df$POS))
-  if ("REF" %in% names(df))    df$REF    <- as.character(df$REF)
-  if ("ALT" %in% names(df))    df$ALT    <- as.character(df$ALT)
-  if ("GENE" %in% names(df))   df$GENE   <- as.character(df$GENE)
-  if ("EFFECT" %in% names(df)) df$EFFECT <- as.character(df$EFFECT)
-  if ("ANNOT1" %in% names(df)) df$ANNOT1 <- as.character(df$ANNOT1)
-  if ("ANNOT2" %in% names(df)) df$ANNOT2 <- as.character(df$ANNOT2)
-  
-  # optional: remove accidental header row if present
-  df <- df %>%
-    filter(!(toupper(CHROM) == "CHROM" & toupper(REF) == "REF"))
-  
-  # show structure
-  cat("Cleaned dimensions:", nrow(df), "rows x", ncol(df), "columns\n")
-  cat("Column names:\n")
-  print(colnames(df))
-  
-  cat("First 6 rows:\n")
-  print(head(df))
-  
-  # exact duplicate row check
-  total_rows <- nrow(df)
-  unique_rows <- nrow(distinct(df))
-  duplicate_rows <- total_rows - unique_rows
-  
-  cat("\nExact row uniqueness:\n")
-  cat("Total rows:     ", total_rows, "\n")
-  cat("Unique rows:    ", unique_rows, "\n")
-  cat("Duplicate rows: ", duplicate_rows, "\n")
-  
-  if (duplicate_rows == 0) {
-    cat("Status: All annotation rows are unique.\n")
-  } else {
-    cat("Status: Exact duplicate annotation rows are present.\n")
-  }
-  
-  # unique SNP check
-  if (all(c("CHROM", "POS", "REF", "ALT") %in% names(df))) {
+    filter(!if_all(everything(), ~ is.na(.) | . == "")) %>%
+    mutate(across(everything(), as.character))
+
+  if (all(c("CHROM", "REF") %in% names(df))) {
     df <- df %>%
-      mutate(SNP_ID = paste(CHROM, POS, REF, ALT, sep = "_"))
-    
-    unique_snps <- n_distinct(df$SNP_ID)
-    extra_annotation_rows <- nrow(df) - unique_snps
-    
-    cat("\nVariant-level uniqueness:\n")
-    cat("Unique SNPs:            ", unique_snps, "\n")
-    cat("Extra annotation rows:  ", extra_annotation_rows, "\n")
+      filter(!(toupper(CHROM) == "CHROM" & toupper(REF) == "REF"))
   }
-  
-  # collect effect values for consistent color mapping
-  if ("EFFECT" %in% names(df)) {
-    all_effects <- c(all_effects, df$EFFECT)
-  }
-  
-  # save cleaned sheet
+
+  df <- df %>%
+    filter(!is.na(EFFECT), EFFECT != "")
+
   sheet_data[[sheet_name]] <- df
+  all_effects <- c(all_effects, df$EFFECT)
 }
 
 # ============================================================
-# GLOBAL EFFECT ORDER ACROSS ALL SHEETS
-# same effect = same color in every plot
+# GLOBAL EFFECT COUNTS
 # ============================================================
-effect_order <- all_effects %>%
+global_effect_counts <- sort(table(all_effects), decreasing = TRUE)
+rare_effects <- names(global_effect_counts[global_effect_counts < low_freq_threshold])
+
+# ============================================================
+# GROUP LOW-FREQUENCY EFFECTS INTO "Other"
+# ============================================================
+sheet_data_grouped <- lapply(sheet_data, function(df) {
+  df %>%
+    mutate(
+      EFFECT_grouped = ifelse(EFFECT %in% rare_effects, "Other", EFFECT)
+    )
+})
+
+# ============================================================
+# GLOBAL EFFECT LEVELS AFTER GROUPING
+# put Other last
+# ============================================================
+effect_levels <- unlist(
+  lapply(sheet_data_grouped, function(df) df$EFFECT_grouped)
+) %>%
   table() %>%
   sort(decreasing = TRUE) %>%
   names()
 
-cat("\n============================================================\n")
-cat("Global EFFECT categories across all sheets:\n")
-print(effect_order)
+effect_levels <- c(setdiff(effect_levels, "Other"), intersect("Other", effect_levels))
 
 # ============================================================
-# SOFT PASTEL COLOR PALETTE
-# extended automatically if needed
+# CONSISTENT COLOR MAP
+# explicitly assign Other
 # ============================================================
 base_colors <- c(
   "#FBB4AE", "#B3CDE3", "#CCEBC5", "#DECBE4", "#FED9A6",
-  "#FFFFCC", "#E5D8BD", "#FDDAEC", "#C7EAE5", "#D9D9D9",
-  "#F2C1D1", "#D6E8C3", "#E6F5C9", "#F1E2CC", "#BFD3E6",
-  "#F4CAE4", "#FFF2AE", "#E0ECF4", "#F1EEF6", "#D0D1E6",
-  "#FDE0DD", "#E5F5E0", "#F7FCF0", "#FEE8C8", "#E6F2FF"
+  "#FFFFCC", "#E5D8BD", "#FDDAEC", "#C7EAE5", "#F2C1D1",
+  "#D6E8C3", "#E6F5C9", "#F1E2CC", "#BFD3E6", "#F4CAE4",
+  "#FFF2AE", "#E0ECF4", "#F1EEF6", "#D0D1E6", "#FDE0DD",
+  "#E5F5E0", "#F7FCF0", "#FEE8C8", "#E6F2FF", "#F4B6C2",
+  "#CDEAC0", "#C9C9FF", "#FFD6A5", "#BDE0FE"
 )
 
-if (length(effect_order) > length(base_colors)) {
-  color_values <- grDevices::colorRampPalette(base_colors)(length(effect_order))
+non_other_levels <- setdiff(effect_levels, "Other")
+
+if (length(non_other_levels) > length(base_colors)) {
+  fill_non_other <- grDevices::colorRampPalette(base_colors)(length(non_other_levels))
 } else {
-  color_values <- base_colors[seq_along(effect_order)]
+  fill_non_other <- base_colors[seq_along(non_other_levels)]
 }
 
-effect_colors <- setNames(color_values, effect_order)
+effect_colors <- setNames(fill_non_other, non_other_levels)
+
+if ("Other" %in% effect_levels) {
+  effect_colors["Other"] <- "#9E9E9E"
+}
+
+print(effect_colors)
 
 # ============================================================
-# FUNCTION: DONUT PLOT FOR ONE SHEET
+# FUNCTION TO MAKE ONE DONUT PLOT
 # ============================================================
-make_donut_plot <- function(df, sheet_name, effect_order, effect_colors, outdir) {
-  
-  if (!"EFFECT" %in% names(df)) {
-    cat("Skipping", sheet_name, "- no EFFECT column found.\n")
-    return(NULL)
-  }
-  
+make_donut_plot <- function(df, sheet_name, effect_levels, effect_colors) {
+
   plot_df <- df %>%
-    filter(!is.na(EFFECT), EFFECT != "") %>%
-    count(EFFECT, sort = TRUE) %>%
-    mutate(EFFECT = factor(EFFECT, levels = effect_order)) %>%
+    count(EFFECT_grouped, sort = TRUE) %>%
+    rename(EFFECT = EFFECT_grouped) %>%
+    mutate(EFFECT = factor(EFFECT, levels = effect_levels)) %>%
+    complete(EFFECT = factor(effect_levels, levels = effect_levels), fill = list(n = 0)) %>%
     arrange(EFFECT) %>%
-    filter(!is.na(EFFECT)) %>%
     mutate(
       Fraction = n / sum(n),
-      ymax = cumsum(Fraction),
-      ymin = lag(ymax, default = 0),
-      ypos = (ymax + ymin) / 2,
-      label = paste0(round(Fraction * 100, 1), "%")
+      Label = ifelse(Fraction >= 0.03, paste0(round(Fraction * 100, 1), "%"), "")
     )
-  
-  p <- ggplot(plot_df, aes(ymax = ymax, ymin = ymin, xmax = 4, xmin = 2, fill = EFFECT)) +
-    geom_rect(color = "white", linewidth = 0.7) +
+
+  ggplot(plot_df, aes(x = 2, y = n, fill = EFFECT)) +
+    geom_col(width = 1, color = "white", linewidth = 0.5) +
     coord_polar(theta = "y") +
-    xlim(c(0.8, 4.2)) +
-    scale_fill_manual(values = effect_colors, drop = FALSE) +
-    theme_void(base_size = 13) +
-    labs(
-      title = sheet_name,
-      fill = "Effect"
+    xlim(0.5, 2.5) +
+    scale_fill_manual(
+      values = effect_colors,
+      limits = effect_levels,
+      drop = FALSE
     ) +
     geom_text(
-      data = plot_df %>% filter(Fraction >= 0.02),
-      aes(x = 3, y = ypos, label = label),
+      aes(label = Label),
+      position = position_stack(vjust = 0.5),
       size = 3
     ) +
+    theme_void(base_size = 11) +
+    labs(title = sheet_name, fill = "Variant type") +
     theme(
-      plot.title = element_text(hjust = 0.5, face = "bold"),
-      legend.position = "right"
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 11),
+      legend.position = "bottom"
     )
-  
-  print(p)
-  
-  outfile <- file.path(
-    outdir,
-    paste0(gsub("[^A-Za-z0-9_]+", "_", sheet_name), "_donut_plot.png")
-  )
-  
-  ggsave(outfile, p, width = 9, height = 6, dpi = 300)
-  
-  invisible(plot_df)
 }
 
 # ============================================================
-# SECOND PASS: MAKE DONUT PLOT FOR EACH SHEET
+# BUILD ALL DONUTS
 # ============================================================
-for (sheet_name in names(sheet_data)) {
-  cat("\nMaking donut plot for:", sheet_name, "\n")
+plot_list <- lapply(names(sheet_data_grouped), function(sheet_name) {
   make_donut_plot(
-    df = sheet_data[[sheet_name]],
+    df = sheet_data_grouped[[sheet_name]],
     sheet_name = sheet_name,
-    effect_order = effect_order,
-    effect_colors = effect_colors,
-    outdir = outdir
+    effect_levels = effect_levels,
+    effect_colors = effect_colors
   )
-}
+})
 
 # ============================================================
-# OPTIONAL: SAVE SUMMARY TABLE OF SHEET STRUCTURE
+# COMBINE
 # ============================================================
-sheet_summary <- lapply(names(sheet_data), function(sheet_name) {
-  df <- sheet_data[[sheet_name]]
-  
-  total_rows <- nrow(df)
-  unique_rows <- nrow(distinct(df))
-  duplicate_rows <- total_rows - unique_rows
-  
-  if (all(c("CHROM", "POS", "REF", "ALT") %in% names(df))) {
-    tmp <- df %>% mutate(SNP_ID = paste(CHROM, POS, REF, ALT, sep = "_"))
-    unique_snps <- n_distinct(tmp$SNP_ID)
-  } else {
-    unique_snps <- NA_integer_
-  }
-  
-  data.frame(
-    Sheet = sheet_name,
-    Rows = total_rows,
-    Unique_rows = unique_rows,
-    Duplicate_rows = duplicate_rows,
-    Unique_SNPs = unique_snps,
-    stringsAsFactors = FALSE
-  )
-}) %>%
-  bind_rows()
+final_plot <- wrap_plots(plot_list, ncol = 3, guides = "collect") &
+  theme(legend.position = "bottom")
 
-write.csv(sheet_summary,
-          file.path(outdir, "sheet_structure_summary.csv"),
-          row.names = FALSE)
+print(final_plot)
 
-cat("\n============================================================\n")
-cat("Done.\n")
-cat("Saved plots and summary table in folder:", outdir, "\n")
+# ============================================================
+# SAVE
+# ============================================================
+ggsave(output_file, final_plot, width = 18, height = 12, dpi = 300)
+
+cat("Saved plot to:", output_file, "\n")
