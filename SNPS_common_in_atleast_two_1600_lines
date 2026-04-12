@@ -1,0 +1,151 @@
+# ============================================================
+# FILES
+# ============================================================
+BULK="I-001-bulk_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.vcf"
+SIB="I-001-sibling_raw_variants_no_filter_genotyped_raw_biallelic_snps_analysis_ready_filteredGT_core_annotated.vcf"
+
+F1="1-1-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.vcf"
+F2="1-2-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.vcf"
+F3="2-1-1600-3_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.vcf"
+F4="2-2-1600-1_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.vcf"
+
+mkdir -p tmp_common1600_ns
+
+# ============================================================
+# 1. POSITIONS PRESENT IN BULK OR SIBLING
+# ============================================================
+grep -v "^#" "$BULK" | cut -f1,2,4,5 | sort -u > tmp_common1600_ns/bulk.pos
+grep -v "^#" "$SIB"  | cut -f1,2,4,5 | sort -u > tmp_common1600_ns/sibling.pos
+cat tmp_common1600_ns/bulk.pos tmp_common1600_ns/sibling.pos | sort -u > tmp_common1600_ns/bulk_sib.pos
+
+# ============================================================
+# 2. EXTRACT missense_variant OR stop_gained FROM EACH 1600 FILE
+#    AND REMOVE ANY SNP PRESENT IN BULK OR SIBLING
+# ============================================================
+
+for f in "$F1" "$F2" "$F3" "$F4"
+do
+    base=$(basename "$f" .vcf)
+
+    grep -v "^#" "$f" | \
+    awk -F'\t' '
+    BEGIN{OFS="\t"}
+    {
+        keep=0
+        gene="."
+        effect="."
+        impact="."
+        hgvs_c="."
+        hgvs_p="."
+
+        n=split($8,a,";")
+        for(i=1;i<=n;i++){
+            if(a[i] ~ /^ANN=/){
+                ann=substr(a[i],5)
+                m=split(ann,b,",")
+                for(j=1;j<=m;j++){
+                    split(b[j],c,"|")
+                    eff=c[2]
+                    g=c[4]
+                    imp=c[3]
+                    hgvsc=c[10]
+                    hgvsp=c[11]
+
+                    if(eff=="missense_variant" || eff=="stop_gained"){
+                        keep=1
+                        effect=eff
+                        gene=(g!="" && g!="." ? g : ".")
+                        impact=(imp!="" && imp!="." ? imp : ".")
+                        hgvs_c=(hgvsc!="" && hgvsc!="." ? hgvsc : ".")
+                        hgvs_p=(hgvsp!="" && hgvsp!="." ? hgvsp : ".")
+                        break
+                    }
+                }
+            }
+            if(keep==1) break
+        }
+
+        if(keep==1){
+            print $1,$2,$4,$5,gene,effect,impact,hgvs_c,hgvs_p
+        }
+    }' | \
+    sort -u > "tmp_common1600_ns/${base}.missense_stop.txt"
+
+    # remove anything present in bulk or sibling
+    awk 'BEGIN{OFS="\t"} {print $1,$2,$3,$4}' "tmp_common1600_ns/${base}.missense_stop.txt" > "tmp_common1600_ns/${base}.keys"
+    grep -Fv -f tmp_common1600_ns/bulk_sib.pos "tmp_common1600_ns/${base}.keys" > "tmp_common1600_ns/${base}.not_in_bulk_sib.keys"
+
+    awk 'NR==FNR{keep[$0]=1; next} (($1"\t"$2"\t"$3"\t"$4) in keep)' \
+        "tmp_common1600_ns/${base}.not_in_bulk_sib.keys" \
+        "tmp_common1600_ns/${base}.missense_stop.txt" \
+        > "tmp_common1600_ns/${base}.not_in_bulk_sib.txt"
+done
+
+# ============================================================
+# 3. FIND SNPs PRESENT IN AT LEAST TWO 1600 LINES
+# ============================================================
+
+cat \
+tmp_common1600_ns/1-1-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.not_in_bulk_sib.txt \
+tmp_common1600_ns/1-2-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.not_in_bulk_sib.txt \
+tmp_common1600_ns/2-1-1600-3_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.not_in_bulk_sib.txt \
+tmp_common1600_ns/2-2-1600-1_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.not_in_bulk_sib.txt | \
+awk -F'\t' '
+BEGIN{OFS="\t"}
+{
+    key=$1"\t"$2"\t"$3"\t"$4
+    count[key]++
+    line[key]=$0
+}
+END{
+    for(k in count){
+        if(count[k] >= 2){
+            print line[k], count[k]
+        }
+    }
+}' | sort -k1,1 -k2,2n > tmp_common1600_ns/common_atleast2.txt
+
+# ============================================================
+# 4. PRINT COUNT
+# ============================================================
+echo "Number of missense/stop_gained SNPs present in at least two 1600 lines and absent in both bulk and sibling:"
+wc -l < tmp_common1600_ns/common_atleast2.txt
+echo ""
+
+# ============================================================
+# 5. PRINT SNPs
+# ============================================================
+echo "CHROM  POS  REF  ALT  GENE  EFFECT  IMPACT  HGVS_C  HGVS_P  N_1600_LINES"
+column -t tmp_common1600_ns/common_atleast2.txt
+echo ""
+
+# ============================================================
+# 6. PRINT WHICH 1600 LINES CONTAIN EACH SNP
+# ============================================================
+echo "SNPs and the 1600 lines they appear in:"
+awk -F'\t' '
+BEGIN{OFS="\t"}
+FNR==NR{
+    key=$1"\t"$2"\t"$3"\t"$4
+    desc[key]=$0
+    next
+}
+{
+    file=FILENAME
+    gsub(/^tmp_common1600_ns\//,"",file)
+    gsub(/\.not_in_bulk_sib\.txt$/,"",file)
+    key=$1"\t"$2"\t"$3"\t"$4
+    if(key in desc){
+        hits[key]=(hits[key]=="" ? file : hits[key]","file)
+    }
+}
+END{
+    for(k in desc){
+        print desc[k], hits[k]
+    }
+}' tmp_common1600_ns/common_atleast2.txt \
+   tmp_common1600_ns/1-1-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.not_in_bulk_sib.txt \
+   tmp_common1600_ns/1-2-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.not_in_bulk_sib.txt \
+   tmp_common1600_ns/2-1-1600-3_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.not_in_bulk_sib.txt \
+   tmp_common1600_ns/2-2-1600-1_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.not_in_bulk_sib.txt | \
+sort -k1,1 -k2,2n | column -t
