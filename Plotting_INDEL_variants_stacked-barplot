@@ -1,1 +1,187 @@
+# ============================================================
+# LIBRARIES
+# ============================================================
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(scales)
+library(patchwork)
 
+# ============================================================
+# DATA (PASTED TABLE AS DATAFRAME)
+# ============================================================
+df <- tribble(
+  ~File, ~Effect, ~Count,
+
+  "1-1-1600-2", "frameshift_variant", 2384,
+  "1-1-1600-2", "disruptive_inframe_deletion", 1671,
+  "1-1-1600-2", "disruptive_inframe_insertion", 1104,
+  "1-1-1600-2", "conservative_inframe_insertion", 1156,
+  "1-1-1600-2", "conservative_inframe_deletion", 973,
+  "1-1-1600-2", "intergenic_region", 13561,
+  "1-1-1600-2", "intron_variant", 4130,
+  "1-1-1600-2", "intragenic_variant", 804,
+
+  "1-2-1600-2", "frameshift_variant", 2594,
+  "1-2-1600-2", "disruptive_inframe_deletion", 1715,
+  "1-2-1600-2", "disruptive_inframe_insertion", 1142,
+  "1-2-1600-2", "conservative_inframe_insertion", 1175,
+  "1-2-1600-2", "conservative_inframe_deletion", 975,
+  "1-2-1600-2", "intergenic_region", 11646,
+  "1-2-1600-2", "intron_variant", 3744,
+  "1-2-1600-2", "intragenic_variant", 810,
+
+  "2-1-1600-3", "frameshift_variant", 3129,
+  "2-1-1600-3", "disruptive_inframe_deletion", 1762,
+  "2-1-1600-3", "disruptive_inframe_insertion", 1198,
+  "2-1-1600-3", "conservative_inframe_insertion", 1245,
+  "2-1-1600-3", "conservative_inframe_deletion", 1056,
+  "2-1-1600-3", "intergenic_region", 19165,
+  "2-1-1600-3", "intron_variant", 5360,
+  "2-1-1600-3", "intragenic_variant", 1218,
+
+  "2-2-1600-1", "frameshift_variant", 2813,
+  "2-2-1600-1", "disruptive_inframe_deletion", 1725,
+  "2-2-1600-1", "disruptive_inframe_insertion", 1174,
+  "2-2-1600-1", "conservative_inframe_insertion", 1214,
+  "2-2-1600-1", "conservative_inframe_deletion", 1007,
+  "2-2-1600-1", "intergenic_region", 24197,
+  "2-2-1600-1", "intron_variant", 6227,
+  "2-2-1600-1", "intragenic_variant", 1319,
+
+  "I-001_bulk", "frameshift_variant", 2843,
+  "I-001_bulk", "disruptive_inframe_deletion", 1736,
+  "I-001_bulk", "disruptive_inframe_insertion", 1171,
+  "I-001_bulk", "conservative_inframe_insertion", 1222,
+  "I-001_bulk", "conservative_inframe_deletion", 1011,
+  "I-001_bulk", "intergenic_region", 20854,
+  "I-001_bulk", "intron_variant", 5651,
+  "I-001_bulk", "intragenic_variant", 1214,
+
+  "I-001_sibling", "frameshift_variant", 3806,
+  "I-001_sibling", "disruptive_inframe_deletion", 1894,
+  "I-001_sibling", "disruptive_inframe_insertion", 1264,
+  "I-001_sibling", "conservative_inframe_insertion", 1310,
+  "I-001_sibling", "conservative_inframe_deletion", 1122,
+  "I-001_sibling", "intergenic_region", 20844,
+  "I-001_sibling", "intron_variant", 5523,
+  "I-001_sibling", "intragenic_variant", 1308
+)
+
+# ============================================================
+# CLEAN SAMPLE NAMES
+# ============================================================
+df <- df %>%
+  mutate(
+    Sample = gsub("-", "_", File),
+    Sample = paste0("sample_", Sample)
+  )
+
+# ============================================================
+# ORDER SAMPLES
+# ============================================================
+sample_order <- c(
+  "sample_I_001_bulk",
+  "sample_I_001_sibling",
+  "sample_1_1_1600_2",
+  "sample_1_2_1600_2",
+  "sample_2_1_1600_3",
+  "sample_2_2_1600_1"
+)
+
+df <- df %>%
+  mutate(Sample = factor(Sample, levels = sample_order))
+
+# ============================================================
+# ORDER EFFECTS BY TOTAL ABUNDANCE
+# ============================================================
+effect_order <- df %>%
+  group_by(Effect) %>%
+  summarise(Total = sum(Count), .groups = "drop") %>%
+  arrange(desc(Total)) %>%
+  pull(Effect)
+
+df <- df %>%
+  mutate(Effect = factor(Effect, levels = effect_order))
+
+# ============================================================
+# SOFT PASTEL COLORS
+# ============================================================
+pastel_colors <- c(
+  "#FBB4AE", "#B3CDE3", "#CCEBC5", "#DECBE4",
+  "#FED9A6", "#FFFFCC", "#E5D8BD", "#FDDAEC"
+)
+
+# ============================================================
+# COUNT PLOT
+# ============================================================
+p_count <- ggplot(df, aes(x = Sample, y = Count, fill = Effect)) +
+  geom_bar(stat = "identity", width = 0.88) +
+  geom_text(
+    data = df %>% filter(Count > 1500),
+    aes(label = Count),
+    position = position_stack(vjust = 0.5),
+    size = 3
+  ) +
+  scale_fill_manual(values = pastel_colors) +
+  labs(
+    title = "INDEL Effects (Counts)",
+    x = "Sample",
+    y = "Count",
+    fill = "Effect"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank(),
+    legend.position = "right"
+  )
+
+# ============================================================
+# PERCENTAGE DATA
+# ============================================================
+df_pct <- df %>%
+  group_by(Sample) %>%
+  mutate(
+    Total = sum(Count),
+    Fraction = Count / Total
+  ) %>%
+  ungroup()
+
+# ============================================================
+# PERCENTAGE PLOT WITH LABELS ON ALL STACKS
+# ============================================================
+p_pct <- ggplot(df_pct, aes(x = Sample, y = Fraction, fill = Effect)) +
+  geom_bar(stat = "identity", width = 0.88) +
+  geom_text(
+    aes(
+      label = ifelse(
+        Fraction >= 0.01,
+        paste0(round(Fraction * 100, 1), "%"),
+        paste0(round(Fraction * 100, 2), "%")
+      )
+    ),
+    position = position_stack(vjust = 0.5),
+    size = 2.8
+  ) +
+  scale_fill_manual(values = pastel_colors) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    title = "INDEL Effects (%)",
+    x = "Sample",
+    y = "Fraction",
+    fill = "Effect"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank(),
+    legend.position = "right"
+  )
+
+# ============================================================
+# COMBINE PLOTS
+# ============================================================
+combined_plot <- p_count + p_pct + plot_layout(widths = c(1, 1))
+
+print(combined_plot)
