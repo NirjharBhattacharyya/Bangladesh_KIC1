@@ -1,0 +1,121 @@
+# ============================================================
+# LIBRARIES
+# ============================================================
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(patchwork)
+
+# ============================================================
+# SAMPLE NAMES
+# ============================================================
+samples <- c(
+  "sample_1_1_1600_2",
+  "sample_1_2_1600_2",
+  "sample_2_1_1600_3",
+  "sample_2_2_1600_1"
+)
+
+# ============================================================
+# HEATMAP 1: COMMON SNPs
+# ============================================================
+common_snp_mat <- matrix(NA, nrow = 4, ncol = 4,
+                         dimnames = list(samples, samples))
+
+diag(common_snp_mat) <- 0
+
+common_snp_mat["sample_2_1_1600_3", "sample_2_2_1600_1"] <- 59
+common_snp_mat["sample_2_2_1600_1", "sample_2_1_1600_3"] <- 59
+
+common_snp_mat["sample_2_1_1600_3", "sample_1_1_1600_2"] <- 56
+common_snp_mat["sample_1_1_1600_2", "sample_2_1_1600_3"] <- 56
+
+common_snp_mat["sample_2_1_1600_3", "sample_1_2_1600_2"] <- 48
+common_snp_mat["sample_1_2_1600_2", "sample_2_1_1600_3"] <- 48
+
+common_snp_mat["sample_2_2_1600_1", "sample_1_1_1600_2"] <- 66
+common_snp_mat["sample_1_1_1600_2", "sample_2_2_1600_1"] <- 66
+
+common_snp_mat["sample_2_2_1600_1", "sample_1_2_1600_2"] <- 33
+common_snp_mat["sample_1_2_1600_2", "sample_2_2_1600_1"] <- 33
+
+common_snp_mat["sample_1_1_1600_2", "sample_1_2_1600_2"] <- 69
+common_snp_mat["sample_1_2_1600_2", "sample_1_1_1600_2"] <- 69
+
+common_snp_df <- as.data.frame(as.table(common_snp_mat))
+colnames(common_snp_df) <- c("Sample1", "Sample2", "Count")
+
+# ============================================================
+# HEATMAP 2: COMMON NONSYNONYMOUS SNPs
+# using missense/stop_gained value for 1-1-1600-2 vs 1-2-1600-2
+# ============================================================
+nonsyn_mat <- matrix(NA, nrow = 4, ncol = 4,
+                     dimnames = list(samples, samples))
+
+diag(nonsyn_mat) <- 0
+
+nonsyn_mat["sample_1_1_1600_2", "sample_1_2_1600_2"] <- 29
+nonsyn_mat["sample_1_2_1600_2", "sample_1_1_1600_2"] <- 29
+
+nonsyn_mat["sample_1_1_1600_2", "sample_2_1_1600_3"] <- 27
+nonsyn_mat["sample_2_1_1600_3", "sample_1_1_1600_2"] <- 27
+
+nonsyn_mat["sample_1_1_1600_2", "sample_2_2_1600_1"] <- 33
+nonsyn_mat["sample_2_2_1600_1", "sample_1_1_1600_2"] <- 33
+
+nonsyn_mat["sample_1_2_1600_2", "sample_2_1_1600_3"] <- 18
+nonsyn_mat["sample_2_1_1600_3", "sample_1_2_1600_2"] <- 18
+
+nonsyn_mat["sample_1_2_1600_2", "sample_2_2_1600_1"] <- 15
+nonsyn_mat["sample_2_2_1600_1", "sample_1_2_1600_2"] <- 15
+
+nonsyn_mat["sample_2_1_1600_3", "sample_2_2_1600_1"] <- 22
+nonsyn_mat["sample_2_2_1600_1", "sample_2_1_1600_3"] <- 22
+
+nonsyn_df <- as.data.frame(as.table(nonsyn_mat))
+colnames(nonsyn_df) <- c("Sample1", "Sample2", "Count")
+
+# ============================================================
+# HEATMAP 1 PLOT
+# ============================================================
+p1 <- ggplot(common_snp_df, aes(x = Sample1, y = Sample2, fill = Count)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = Count), size = 5) +
+  scale_fill_gradient(low = "#F7FBFF", high = "#6BAED6", na.value = "grey95") +
+  labs(
+    title = "Common SNPs Between Samples",
+    x = "",
+    y = "",
+    fill = "Count"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  ) +
+  coord_fixed()
+
+# ============================================================
+# HEATMAP 2 PLOT
+# ============================================================
+p2 <- ggplot(nonsyn_df, aes(x = Sample1, y = Sample2, fill = Count)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = Count), size = 5) +
+  scale_fill_gradient(low = "#FFF5F0", high = "#FC9272", na.value = "grey95") +
+  labs(
+    title = "Common Nonsynonymous SNPs Between Samples",
+    x = "",
+    y = "",
+    fill = "Count"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  ) +
+  coord_fixed()
+
+# ============================================================
+# PRINT TOGETHER
+# ============================================================
+p1 + p2
