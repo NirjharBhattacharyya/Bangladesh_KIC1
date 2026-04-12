@@ -1,0 +1,164 @@
+# ============================================================
+# FILES
+# ============================================================
+BULK="I-001-bulk_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.vcf"
+SIB="I-001-sibling_raw_variants_no_filter_genotyped_raw_biallelic_snps_analysis_ready_filteredGT_core_annotated.vcf"
+
+F1="1-1-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.vcf"
+F2="1-2-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.vcf"
+F3="2-1-1600-3_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.vcf"
+F4="2-2-1600-1_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.vcf"
+
+mkdir -p tmp_gene_overlap_no_common_snp
+
+# ============================================================
+# 1. BULK + SIBLING SNP KEYS
+# ============================================================
+grep -v "^#" "$BULK" | cut -f1,2,4,5 | sort -u > tmp_gene_overlap_no_common_snp/bulk.keys
+grep -v "^#" "$SIB"  | cut -f1,2,4,5 | sort -u > tmp_gene_overlap_no_common_snp/sib.keys
+cat tmp_gene_overlap_no_common_snp/bulk.keys tmp_gene_overlap_no_common_snp/sib.keys | sort -u > tmp_gene_overlap_no_common_snp/bulk_sib.keys
+
+# ============================================================
+# 2. EXTRACT missense/stop_gained SNPs FROM EACH 1600 FILE
+#    then remove SNPs present in bulk or sibling
+#    output columns:
+#    CHROM POS REF ALT GENE EFFECT IMPACT HGVS_C HGVS_P
+# ============================================================
+for f in "$F1" "$F2" "$F3" "$F4"
+do
+    base=$(basename "$f" .vcf)
+
+    grep -v "^#" "$f" | \
+    awk -F'\t' '
+    BEGIN{OFS="\t"}
+    {
+        n=split($8,a,";")
+        keep=0
+        for(i=1;i<=n;i++){
+            if(a[i] ~ /^ANN=/){
+                ann=substr(a[i],5)
+                m=split(ann,b,",")
+                for(j=1;j<=m;j++){
+                    split(b[j],c,"|")
+                    eff=c[2]
+                    gene=c[4]
+                    impact=c[3]
+                    hgvsc=c[10]
+                    hgvsp=c[11]
+
+                    if((eff=="missense_variant" || eff=="stop_gained") && gene!="" && gene!="."){
+                        print $1,$2,$4,$5,gene,eff,impact,(hgvsc==""?".":hgvsc),(hgvsp==""?".":hgvsp)
+                    }
+                }
+            }
+        }
+    }' | sort -u > "tmp_gene_overlap_no_common_snp/${base}.all.txt"
+
+    awk 'BEGIN{OFS="\t"} {print $1,$2,$3,$4}' "tmp_gene_overlap_no_common_snp/${base}.all.txt" | sort -u > "tmp_gene_overlap_no_common_snp/${base}.keys"
+
+    grep -Fv -f tmp_gene_overlap_no_common_snp/bulk_sib.keys "tmp_gene_overlap_no_common_snp/${base}.keys" > "tmp_gene_overlap_no_common_snp/${base}.keep.keys"
+
+    awk 'NR==FNR{keep[$0]=1; next} (($1"\t"$2"\t"$3"\t"$4) in keep)' \
+        "tmp_gene_overlap_no_common_snp/${base}.keep.keys" \
+        "tmp_gene_overlap_no_common_snp/${base}.all.txt" \
+        | sort -u > "tmp_gene_overlap_no_common_snp/${base}.filtered.txt"
+done
+
+# ============================================================
+# 3. FUNCTION: FIND GENES COMMON BETWEEN TWO FILES
+#    BUT WITH NO EXACT COMMON SNP BETWEEN THEM
+# ============================================================
+compare_pair () {
+    A="$1"
+    B="$2"
+    ANAME="$3"
+    BNAME="$4"
+
+    awk -F'\t' 'BEGIN{OFS="\t"} {print $5}' "$A" | sort -u > tmp_gene_overlap_no_common_snp/a.genes
+    awk -F'\t' 'BEGIN{OFS="\t"} {print $5}' "$B" | sort -u > tmp_gene_overlap_no_common_snp/b.genes
+    comm -12 tmp_gene_overlap_no_common_snp/a.genes tmp_gene_overlap_no_common_snp/b.genes > tmp_gene_overlap_no_common_snp/common.genes
+
+    awk -F'\t' 'BEGIN{OFS="\t"} {print $1,$2,$3,$4,$5}' "$A" | sort -u > tmp_gene_overlap_no_common_snp/a.snp_gene
+    awk -F'\t' 'BEGIN{OFS="\t"} {print $1,$2,$3,$4,$5}' "$B" | sort -u > tmp_gene_overlap_no_common_snp/b.snp_gene
+
+    comm -12 \
+        <(awk -F'\t' 'BEGIN{OFS="\t"} {print $1,$2,$3,$4,$5}' tmp_gene_overlap_no_common_snp/a.snp_gene | sort -u) \
+        <(awk -F'\t' 'BEGIN{OFS="\t"} {print $1,$2,$3,$4,$5}' tmp_gene_overlap_no_common_snp/b.snp_gene | sort -u) \
+        | cut -f5 | sort -u > tmp_gene_overlap_no_common_snp/genes_with_common_snp
+
+    comm -23 \
+        <(sort -u tmp_gene_overlap_no_common_snp/common.genes) \
+        <(sort -u tmp_gene_overlap_no_common_snp/genes_with_common_snp) \
+        > tmp_gene_overlap_no_common_snp/target.genes
+
+    awk -F'\t' -v s1="$ANAME" -v s2="$BNAME" '
+    BEGIN{OFS="\t"}
+    NR==FNR{
+        keep[$1]=1
+        next
+    }
+    ($5 in keep){
+        k=$5
+        snp=$1 ":" $2 ":" $3 ">" $4
+        if(FILENAME==ARGV[2]){
+            if(a_snps[k]=="") a_snps[k]=snp
+            else a_snps[k]=a_snps[k] "," snp
+        } else {
+            if(b_snps[k]=="") b_snps[k]=snp
+            else b_snps[k]=b_snps[k] "," snp
+        }
+    }
+    END{
+        for(g in keep){
+            print s1, s2, g, a_snps[g], b_snps[g]
+        }
+    }' \
+    tmp_gene_overlap_no_common_snp/target.genes \
+    "$A" "$B"
+}
+
+# ============================================================
+# 4. RUN ALL PAIRWISE COMPARISONS
+# ============================================================
+{
+echo -e "Sample1\tSample2\tGene\tSNPs_in_Sample1\tSNPs_in_Sample2"
+
+compare_pair \
+tmp_gene_overlap_no_common_snp/1-1-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.filtered.txt \
+tmp_gene_overlap_no_common_snp/1-2-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.filtered.txt \
+"1-1-1600-2" "1-2-1600-2"
+
+compare_pair \
+tmp_gene_overlap_no_common_snp/1-1-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.filtered.txt \
+tmp_gene_overlap_no_common_snp/2-1-1600-3_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.filtered.txt \
+"1-1-1600-2" "2-1-1600-3"
+
+compare_pair \
+tmp_gene_overlap_no_common_snp/1-1-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.filtered.txt \
+tmp_gene_overlap_no_common_snp/2-2-1600-1_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.filtered.txt \
+"1-1-1600-2" "2-2-1600-1"
+
+compare_pair \
+tmp_gene_overlap_no_common_snp/1-2-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.filtered.txt \
+tmp_gene_overlap_no_common_snp/2-1-1600-3_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.filtered.txt \
+"1-2-1600-2" "2-1-1600-3"
+
+compare_pair \
+tmp_gene_overlap_no_common_snp/1-2-1600-2_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.filtered.txt \
+tmp_gene_overlap_no_common_snp/2-2-1600-1_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.filtered.txt \
+"1-2-1600-2" "2-2-1600-1"
+
+compare_pair \
+tmp_gene_overlap_no_common_snp/2-1-1600-3_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.filtered.txt \
+tmp_gene_overlap_no_common_snp/2-2-1600-1_raw_variants_no_filter_genotyped_biallelic_snps_analysis_ready_filteredGT_core_annotated.filtered.txt \
+"2-1-1600-3" "2-2-1600-1"
+} > tmp_gene_overlap_no_common_snp/gene_table.tsv
+
+# ============================================================
+# 5. PRINT COUNT AND TABLE
+# ============================================================
+echo "Number of pairwise shared genes with no exact shared SNP:"
+tail -n +2 tmp_gene_overlap_no_common_snp/gene_table.tsv | wc -l
+echo ""
+
+column -t -s $'\t' tmp_gene_overlap_no_common_snp/gene_table.tsv
